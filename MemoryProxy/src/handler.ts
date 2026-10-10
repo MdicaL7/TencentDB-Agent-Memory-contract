@@ -1294,6 +1294,7 @@ export async function handleChatCompletions(
         userId: userId || null,
         sessionKey,
       });
+  if(tdaiIdentity)tdaiIdentity.requestId=traceId;
   // OpenCode places a fresh human turn at the end of messages. A tool-loop
   // continuation ends with a tool message and must not be counted as another
   // human input. Capture this before injection can prepend recalled memories.
@@ -1306,6 +1307,10 @@ export async function handleChatCompletions(
   const tdaiUserMessage: TdaiMessage | null = agentSource === "opencode"
     ? (opencodeUserQuery ? { role: "user", content: opencodeUserQuery } : null)
     : extractLatestUserMessage(messages);
+
+  if(tdaiClient && tdaiIdentity && !isAuxiliary && agentSource==='opencode') {
+    await tdaiClient.recordContractTools(tdaiIdentity,messages);
+  }
 
   // ── Context injection (before cost guard) ──────────────────────────────
   if (!injectedSkipped && config.injection?.enabled && config.injection.injectors.length > 0) {

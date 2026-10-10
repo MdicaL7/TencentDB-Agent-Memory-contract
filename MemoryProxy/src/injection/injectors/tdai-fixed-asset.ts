@@ -78,6 +78,9 @@ export async function resolveFixedAssetCtxs(
     const detail = await client.getAgentFixedAssets(identity.agentId, { assetTypes: ["chat_memory"] });
     const selfAgent = detail.agent as { agent_id?: string; team_id?: string; owner_user_id?: string };
     const selfTeamId = selfAgent?.team_id || identity.teamId;
+    if (JSON.parse((selfAgent as any).metadata_json || "{}").prompt_mode === "contract") {
+      const result=[selfCtx]; custom[CACHE_KEY]=result;ctx.metadata.custom=custom;return result;
+    }
 
     const items: FixedAssetCtx[] = [];
     for (const item of detail.items) {

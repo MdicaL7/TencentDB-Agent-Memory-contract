@@ -73,6 +73,7 @@ export class TdaiProfileMemoryInjector implements InjectionHook {
     // baseConfig.serviceId (config value) when spaceId is empty.
     const client = new TdaiClient({
       ...this.baseConfig,
+      requestUserKey: userKey,
       serviceId: spaceId || this.baseConfig.serviceId,
     });
 

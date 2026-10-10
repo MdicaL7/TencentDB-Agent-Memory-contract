@@ -1,6 +1,7 @@
 import type { TdaiIdentity } from "./types.js";
 
 interface SessionInfoLike {
+  user_key?: unknown;
   session_id?: unknown;
   team_id?: unknown;
   user_id?: unknown;
@@ -30,13 +31,13 @@ export function deriveTdaiIdentity(source: TdaiIdentitySource): TdaiIdentity | n
   const agentId = pickString(session?.agent_id);
   const sessionId = pickString(session?.session_id) ?? pickString(source.sessionKey);
   const taskId = pickString(session?.task_id);
-  const userKey = pickString(source.userKey);
+  const userKey = pickString(source.userKey) ?? pickString(session?.user_key);
   if (!teamId || !userId || !agentId || !sessionId) return null;
   return { teamId, userId, agentId, sessionId, taskId, userKey };
 }
 
 export function getTdaiIdentity(custom: Record<string, unknown> | undefined): TdaiIdentity | null {
-  const userKey = pickString(custom?.userKey);
+  const userKey = pickString(custom?.userKey) ?? pickString((custom?.session as Record<string, unknown> | undefined)?.user_key);
   return deriveTdaiIdentity({
     sessionInfo: custom?.session as Record<string, unknown> | null | undefined,
     userKey,

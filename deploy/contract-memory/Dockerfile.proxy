@@ -1,0 +1,3 @@
+ARG BASE_PROXY=local/tdai-memory-proxy:8b86874a@sha256:b7a4fc321d0ceaad7e63bda906528ce1216df47adcdc13573c351cb09a403e92
+FROM ${BASE_PROXY}
+COPY MemoryProxy/src /app/src

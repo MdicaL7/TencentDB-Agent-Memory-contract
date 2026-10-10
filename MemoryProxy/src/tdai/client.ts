@@ -39,10 +39,10 @@ function chunkConversationMessages(messages: TdaiMessage[]): TdaiMessage[] {
       ) {
         end -= 1;
       }
-      chunks.push({ role: message.role, content: message.content.slice(start, end) });
+      chunks.push({ ...message, content: message.content.slice(start, end) });
       start = end;
     }
-    return chunks;
+    return chunks.map((chunk,index)=>({...chunk,...(message.source_event_id?{source_event_id:message.source_event_id+":"+index,chunk_group:message.source_event_id,chunk_index:index,chunk_count:chunks.length}:{})}));
   });
 }
 
@@ -91,7 +91,7 @@ export class TdaiClient {
   async addConversation(identity: TdaiIdentity, messages: TdaiMessage[]): Promise<void> {
     if (!this.isEnabled() || !this.config.writeL0 || messages.length === 0) return;
 
-    const chunkedMessages = chunkConversationMessages(messages);
+    const chunkedMessages = chunkConversationMessages(messages.map((m,i)=>({...m,source_event_id:identity.requestId?identity.requestId+':message:'+i:m.source_event_id})));
     log.info("tdai-recorder:write-l0", {
       team: identity.teamId,
       agent: identity.agentId,
@@ -107,7 +107,7 @@ export class TdaiClient {
       const batch = chunkedMessages.slice(offset, offset + TDAI_CONVERSATION_MAX_MESSAGES);
       await this.postForCtx(
         "/v3/conversation/add",
-        { teamId: identity.teamId, userId: identity.userId, agentId: identity.agentId },
+        { teamId: identity.teamId, userId: identity.userId, agentId: identity.agentId, userKey: identity.userKey } as TdaiAgentCtx,
         {
           team_id: identity.teamId,
           user_id: identity.userId,
@@ -118,11 +118,25 @@ export class TdaiClient {
         },
         identity.sessionId,
         identity.taskId,
-        { includeSession: true, includeTask: true },
+        { includeSession: true, includeTask: true, requireSuccess: true },
       );
     }
   }
 
+  async recordContractTools(identity: TdaiIdentity, messages: unknown[]): Promise<void> {
+    const calls=new Map(messages.flatMap((m:any)=>(m?.tool_calls||[]).map((t:any)=>[t.id,t.function])));
+    const tools=messages.filter((m:any)=>m?.role==='tool').map((m:any)=>({role:'tool',tool_name:(calls.get(m.tool_call_id) as any)?.name || m.name,tool_path:(()=>{try{const a=JSON.parse((calls.get(m.tool_call_id) as any)?.arguments || '{}');return a.filePath || a.path;}catch{return undefined;}})(),source_event_id:m.tool_call_id?('tool:'+m.tool_call_id):undefined,content:typeof m.content==='string'?m.content:(Array.isArray(m.content)?m.content.map((p:any)=>p.text||'').join('\n'):JSON.stringify(m.content))}));
+    if(!tools.length)return;
+    const chunks=chunkConversationMessages(tools as TdaiMessage[]);
+    for(let i=0;i<chunks.length;i+=100)await this.postForCtx('/v3/contract-memory/capture-tools', {teamId:identity.teamId,userId:identity.userId,agentId:identity.agentId,userKey:identity.userKey} as TdaiAgentCtx,
+      {team_id:identity.teamId,agent_id:identity.agentId,user_id:identity.userId,task_id:identity.taskId,session_id:identity.sessionId,messages:chunks.slice(i,i+100)},identity.sessionId,identity.taskId);
+  }
+  async recordContractAssistant(identity: TdaiIdentity, content: string): Promise<void> {
+    const chunks=chunkConversationMessages([{role:'assistant',content,source_event_id:identity.requestId?identity.requestId+':assistant':undefined}]);
+    for(let i=0;i<chunks.length;i+=100)await this.postForCtx('/v3/contract-memory/capture-events',
+      {teamId:identity.teamId,userId:identity.userId,agentId:identity.agentId,userKey:identity.userKey} as TdaiAgentCtx,
+      {team_id:identity.teamId,agent_id:identity.agentId,user_id:identity.userId,task_id:identity.taskId,session_id:identity.sessionId,messages:chunks.slice(i,i+100)},identity.sessionId,identity.taskId);
+  }
   async searchL1(identity: TdaiIdentity, query: string): Promise<TdaiL1Memory[]> {
     return this.searchL1ForCtx(
       { teamId: identity.teamId, userId: identity.userId, agentId: identity.agentId },
@@ -267,7 +281,7 @@ export class TdaiClient {
     body: Record<string, unknown>,
     sessionId: string,
     taskId: string | undefined,
-    options: { includeSession: boolean; includeTask: boolean } = { includeSession: true, includeTask: true },
+    options: { includeSession: boolean; includeTask: boolean; requireSuccess?: boolean } = { includeSession: true, includeTask: true },
   ): Promise<T> {
     const base = this.config.endpoint.replace(/\/$/, "");
     const controller = new AbortController();
@@ -281,6 +295,8 @@ export class TdaiClient {
         "x-tdai-user-id": ctx.userId,
         "x-tdai-agent-id": ctx.agentId,
       };
+      const callerKey = (ctx as TdaiAgentCtx & {userKey?:string}).userKey || this.config.requestUserKey;
+      if(callerKey) headers["x-tdai-user-key"] = callerKey;
       if (options.includeSession && sessionId) headers["x-tdai-session-id"] = sessionId;
       if (options.includeTask && taskId) headers["x-tdai-task-id"] = taskId;
 
@@ -290,11 +306,12 @@ export class TdaiClient {
         headers,
         body: JSON.stringify(stripUndefined(body)),
       });
-      if (!res.ok) return {} as T;
+      if (!res.ok) {if(options.requireSuccess)throw new Error("Memory capture rejected HTTP "+res.status);return {} as T;}
       const envelope = await res.json() as TdaiEnvelope<T>;
-      if (typeof envelope.code === "number" && envelope.code !== 0) return {} as T;
+      if (typeof envelope.code === "number" && envelope.code !== 0) {if(options.requireSuccess)throw new Error("Memory capture rejected code "+envelope.code);return {} as T;}
       return (envelope.data ?? {}) as T;
-    } catch {
+    } catch (error) {
+      if(options.requireSuccess)throw error;
       return {} as T;
     } finally {
       clearTimeout(timer);

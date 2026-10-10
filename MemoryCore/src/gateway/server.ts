@@ -15,6 +15,8 @@
  */
 
 import http from "node:http";
+import { ContractMemory } from "../contract-memory/service.js";
+import { ContractError } from "../contract-memory/store.js";
 import { join } from "node:path";
 import { URL } from "node:url";
 import { timingSafeEqual } from "node:crypto";
@@ -325,6 +327,18 @@ export class TdaiGateway {
   private analyticsChClientInstance: AnalyticsChClient | null | undefined = undefined; // undefined = not yet initialized
   private analyticsChInitPromise: Promise<void> | null = null;
   private memorySystemUserConfig: MemorySystemUserConfig | undefined;
+  private contractMemory?: ContractMemory;
+  private contracts(): ContractMemory {
+    return this.contractMemory ??= new ContractMemory({baseDir:this.config.data.baseDir,controlKey:process.env.CONTRACT_MEMORY_CONTROL_KEY,
+      meta:instance=>this.ensureMetadataService(instance),
+      llm:instance=>resolveStandaloneLlmForRuntime(this.config.llm!,instance)});
+  }
+  private async contractRoute(path:string,instance:string,body:unknown,key:string,controlKey='') {
+    const b=body as Record<string,unknown>;
+    if (!path.startsWith('/v3/contract-memory/') && (!/^\/v[23]\/(conversation|atomic|scenario|core|chat-memory)\//.test(path) || !(await this.contracts().managed(instance,b)))) return null;
+    try { return {code:0,message:'ok',data:await this.contracts().dispatch(path,instance,b,key,controlKey)}; }
+    catch(e) { return {code:e instanceof ContractError?e.status:503,message:e instanceof ContractError?e.message:'合同记忆服务暂时不可用'}; }
+  }
   private readonly metadataServiceByInstance = new Map<string, MetadataService>();
 
   // ── Skill conversation-add (§21): per-instance handler cache ──
@@ -877,6 +891,7 @@ export class TdaiGateway {
       });
     }
 
+    this.contractMemory?.close();
     await this.core.destroy();
     this.logger.info("Gateway stopped");
   }
@@ -945,6 +960,13 @@ export class TdaiGateway {
         if (handledV3) return;
       }
 
+      if (pathname.startsWith('/v3/contract-memory/') && method==='POST') {
+        if(!this.checkAuthForV2(req,res))return;
+        const instance=String(req.headers['x-tdai-service-id'] ?? '');
+        if(!instance){sendJson(res,422,{code:422,message:'缺少服务实例'});return;}
+        const result=await this.contractRoute(pathname,instance,await parseJsonBody(req),String(req.headers['x-tdai-user-key'] ?? ''),String(req.headers.authorization ?? '').replace(/^Bearer\s+/i,''));
+        sendJson(res,result?.code || 200,result);return;
+      }
       // ── v3 analytics routes (/v3/analytics/*) ──
       // Layer 1 (Bearer apiKey): checked here explicitly. The /v3/meta/*
       // guard above ONLY covers `V3_PREFIX = "/v3/meta"`, it does not
@@ -983,6 +1005,7 @@ export class TdaiGateway {
       }
 
       const v2Deps: V2RouterDeps = {
+        contractRoute:(path,instance,body,key,controlKey)=>this.contractRoute(path,instance,body,key,controlKey),
         getStore: () => this.core.getVectorStore(),
         getEmbedding: () => this.core.getEmbeddingService(),
         getStorage: () => this.core.getStorage(),

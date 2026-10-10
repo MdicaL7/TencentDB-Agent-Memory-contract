@@ -1,0 +1,3 @@
+ARG BASE_CORE=local/tdai-memory-core:8b86874a@sha256:67482acab5b116bfd747c6022197494f5724b8bb1bc52a4679281ba6dd28ef8a
+FROM ${BASE_CORE}
+COPY MemoryCore/src /app/src

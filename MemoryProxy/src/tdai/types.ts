@@ -1,6 +1,7 @@
 /** TDAI memory integration configuration and shared types. */
 
 export interface TdaiMemoryConfig {
+  requestUserKey?: string;
   enabled: boolean;
   /** TDAI Gateway base URL, e.g. http://127.0.0.1:8420 */
   endpoint: string;
@@ -19,6 +20,7 @@ export interface TdaiMemoryConfig {
 }
 
 export interface TdaiIdentity {
+  requestId?: string;
   teamId: string;
   userId: string;
   agentId: string;
@@ -59,7 +61,13 @@ export interface TdaiL1Hit extends TdaiL1Memory {
 }
 
 export interface TdaiMessage {
-  role: "user" | "assistant";
+  source_event_id?: string;
+  tool_name?: string;
+  tool_path?: string;
+  chunk_group?: string;
+  chunk_index?: number;
+  chunk_count?: number;
+  role: "user" | "assistant" | "tool";
   content: string;
 }
 

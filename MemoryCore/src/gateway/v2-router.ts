@@ -220,6 +220,7 @@ async function recordAudit(
 // ============================
 
 export interface V2RouterDeps {
+  contractRoute?: (path: string, instance: string, body: unknown, userKey: string, controlKey: string) => Promise<{code:number;message:string;data?:unknown} | null>;
   /** Get the default IMemoryStore (standalone fallback). */
   getStore: () => IMemoryStore | undefined;
   /** Get the default EmbeddingService (standalone fallback). */
@@ -576,6 +577,10 @@ export async function handleV2Route(
     const body = method === "GET"
       ? Object.fromEntries(new URL(req.url ?? pathname, "http://localhost").searchParams.entries())
       : await parseJsonBody(req);
+    if (deps.contractRoute) {
+      const handled = await deps.contractRoute(pathname, auth.serviceId, body, String(req.headers['x-tdai-user-key'] ?? ''),String(req.headers.authorization ?? '').replace(/^Bearer\s+/i,''));
+      if (handled) { sendJson(res, handled.code || 200, { ...handled, request_id: requestId }); return true; }
+    }
     perfMark("parseJsonBody", `dur=${Date.now() - bodyStart}ms len=${req.headers["content-length"] ?? "?"}`);
 
     // Tenancy isolation — pulled from body (preferred) or x-tdai-* headers

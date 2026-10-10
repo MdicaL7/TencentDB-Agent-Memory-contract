@@ -140,7 +140,7 @@ function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
   // 通常是 bare sessionId。按候选前缀顺序探,命中即返回。
   const candidates = sessionId.includes(":")
     ? [sessionId]
-    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`];
+    : [sessionId, `opencode:${sessionId}`, `codebuddy:${sessionId}`, `claude-code:${sessionId}`];
   for (const k of candidates) {
     const state = getSessionStore().get(k);
     if (state) {
@@ -372,12 +372,13 @@ export function createMemoryBridgeHandler(
       "Authorization": `Bearer ${upstreamToken}`,
       "x-tdai-service-id": upstreamServiceId,
       "Content-Type": "application/json",
+      ...(ids.user_key ? {"x-tdai-user-key":ids.user_key} : {}),
     };
 
     const ctxs = await resolveMemoryCtxs(config, ids, sessionKey);
     // task_id 优先级：caller 显式传 > session 注入。session_id 保持"仅 caller 显式传"，
     // 因为 search 类希望默认跨 session（agent 维度）；task_id 属于身份维度，仍应强制。
-    const effectiveTaskId = modelTaskId ?? ids.task_id;
+    const effectiveTaskId = ids.task_id;
     const makeOutbound = (target: FixedAssetCtx): Record<string, unknown> => ({
       ...inboundBody,
       user_id: target.userId,
