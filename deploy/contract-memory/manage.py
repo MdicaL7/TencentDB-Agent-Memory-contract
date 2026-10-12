@@ -8,7 +8,7 @@ def run(args,**kw):
  result=subprocess.run(args,**kw)
  if result.returncode:raise RuntimeError('Docker operation failed; arguments suppressed to protect credentials')
  return result
-def start(source):
+def start(source,model_config=None):
  os.umask(0o077);STATE.mkdir(exist_ok=True)
  for orig,name in [('.memory-core-config/tdai-gateway.yaml','core.yaml'),('.proxy-config/config.yaml','proxy.yaml')]:
   p=STATE/name
@@ -16,7 +16,22 @@ def start(source):
    text=(source/orig).read_text().replace('http://memory-core:8420','http://tdai-contract-core:8420').replace('http://127.0.0.1:8096','http://127.0.0.1:8106');p.write_text(text);p.chmod(0o600)
  control=STATE/'control.key'
  if not control.exists():control.write_text(secrets.token_urlsafe(48));control.chmod(0o600)
- value=control.read_text().strip();env=STATE/'core.env';env.write_text('CONTRACT_MEMORY_CONTROL_KEY='+value+'\n');env.chmod(0o600)
+ value=control.read_text().strip();env=STATE/'core.env';env_lines=['CONTRACT_MEMORY_CONTROL_KEY='+value]
+ # Explicit opt-in only; this script is not run during test-pack preparation.
+ selected_model=STATE/'contract-model.json'
+ if model_config:
+  model_text=model_config.read_text();model=json.loads(model_text)['roles']['memory_extraction']
+  if model['provider'] not in ['codex_subscription','openai_compatible']:raise ValueError('Unsupported contract model provider')
+  secret_name=model.get('token_env','CONTRACT_EXTRACTION_ADAPTER_TOKEN') if model['provider']=='codex_subscription' else model.get('api_key_env','DEEPSEEK_API_KEY')
+  if not re.fullmatch('[A-Z][A-Z0-9_]*',secret_name) or not os.environ.get(secret_name):raise ValueError('Model credential environment variable is missing')
+  if '\n' in os.environ[secret_name]:raise ValueError('Invalid model credential')
+  selected_model.write_text(model_text);selected_model.chmod(0o600)
+  env_lines += ['CONTRACT_MEMORY_MODEL_CONFIG=/data/config/contract-model.json',secret_name+'='+os.environ[secret_name]]
+ elif selected_model.exists():
+  # Keep the previously opted-in private model settings across a rebuild.
+  prior=env.read_text().splitlines() if env.exists() else []
+  env_lines += [line for line in prior if not line.startswith('CONTRACT_MEMORY_CONTROL_KEY=')]
+ env.write_text('\n'.join(env_lines)+'\n');env.chmod(0o600)
  proxy=STATE/'proxy.yaml';text=proxy.read_text();text=re.sub(r'(^tdai:\n[\s\S]*?\n  apiKey:)\s*[^\n]+',lambda m:m.group(1)+' '+json.dumps(value),text,count=1,flags=re.MULTILINE);proxy.write_text(text);proxy.chmod(0o600)
  run(['docker','network','create','tdai-contract-stack'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL) if subprocess.run(['docker','network','inspect','tdai-contract-stack'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode else None
  for name,dockerfile,base in [(CORE,'core','local/tdai-memory-core:8b86874a'),(PROXY,'proxy','local/tdai-memory-proxy:8b86874a')]:
@@ -25,6 +40,7 @@ def start(source):
  for name,port,inside,config,data in [(CORE,8430,8420,'core.yaml','/data/tdai-memory'),(PROXY,8106,8096,'proxy.yaml','/data/tdai-memory-proxy')]:
   if subprocess.run(['docker','inspect',name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0:run(['docker','rm','-f',name],stdout=subprocess.DEVNULL)
   env=['--env-file',str(STATE/'core.env'),'-e','STORE_MODE=sqlite','-e','TDAI_METADATA_BACKEND=sqlite','-e','TDAI_METADATA_SQLITE_PATH=/data/tdai-memory/metadata.sqlite'] if name==CORE else []
+  if name==CORE and selected_model.exists():env+=['-v',f'{selected_model}:/data/config/contract-model.json:ro']
   run(['docker','run','-d','--name',name,'--network','tdai-contract-stack','--restart','unless-stopped','-p',f'127.0.0.1:{port}:{inside}','-v',f'{STATE/config}:/data/config/tdai-gateway.yaml:ro' if name==CORE else f'{STATE/config}:/data/config.yaml:ro','-v',f'{name}-data:{data}',*env,'local/'+name+':contract-v1'],stdout=subprocess.DEVNULL)
  for port in [8430,8106]:
   for _ in range(45):
@@ -49,6 +65,7 @@ def start(source):
  (STATE/'deployment.json').write_text(json.dumps({'images':images,'ports':{'core':8430,'proxy':8106},'source_sha256':hashlib.sha256(b''.join(p.read_bytes() for p in sorted(ROOT.glob('Memory*/src/**/*.ts')))).hexdigest(),'git':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()},indent=2))
  print('Contract Memory ready: Core 8430 / Proxy 8106; initialization credential in ignored state/admin.key')
 if __name__=='__main__':
- p=argparse.ArgumentParser();p.add_argument('action',choices=['start','stop','restart']);p.add_argument('--source',type=Path,default=Path('/Users/dicam/CodeDir/TencentDB-Agent-Memory/deploy/global-images'));a=p.parse_args()
- if a.action=='start':start(a.source)
+ p=argparse.ArgumentParser();p.add_argument('action',choices=['start','stop','restart']);p.add_argument('--source',type=Path,default=Path('/Users/dicam/CodeDir/TencentDB-Agent-Memory/deploy/global-images'));p.add_argument('--contract-model-config',type=Path);a=p.parse_args()
+ if a.action=='start':start(a.source,a.contract_model_config)
+ elif a.contract_model_config:p.error('Model settings require explicit start/rebuild; restart does not change configuration')
  else:run(['docker',a.action,CORE,PROXY])

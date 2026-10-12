@@ -2,13 +2,14 @@ import { join } from 'node:path';
 import { readdirSync, existsSync } from 'node:fs';
 import { ContractStore, ContractError, hash, validateContent, type Identity } from './store.js';
 import { CONTRACT_PROMPT_VERSION, CONTRACT_L1_PROMPT, CONTRACT_L2_PROMPT, CONTRACT_L3_PROMPT, CONTRACT_CONFLICT_PROMPT } from './prompts.js';
+import {resolveContractLlm,contractCompletion} from './completion.js';
 interface ContractMetadata {getTeamById?(id:string):Promise<any>;verifyAuth(key:string):Promise<any>;getAgentById(id:string):Promise<any>;getTeamMember(team:string,user:string):Promise<any>;getUserById(id:string):Promise<any>;getTaskById(id:string):Promise<any>} 
 export interface ContractDeps { controlKey?: string; baseDir: string; meta:(instance:string)=>Promise<ContractMetadata>; llm:(instance:string)=>{baseUrl:string;apiKey:string;model:string;timeoutMs?:number} }
-const decode = (s:string) => JSON.parse(s.replace(/^\s*```(?:json)?\s*/,'').replace(/\s*```\s*$/,''));
 export class ContractMemory {
   stores = new Map<string,ContractStore>(); busy=new Set<string>(); timer:ReturnType<typeof setInterval>;
   constructor(public deps:ContractDeps) { const directory=join(deps.baseDir,'contract-memory'); if(existsSync(directory)) for(const item of readdirSync(directory)){ const file=join(directory,item,'contract.sqlite');if(existsSync(file)){const st=new ContractStore(file);const job=st.one('SELECT instance FROM jobs LIMIT 1');if(job)this.stores.set(job.instance,st);else st.db.close();}} this.timer=setInterval(()=>void this.tick(),3000);this.timer.unref(); }
   store(instance:string) { let s=this.stores.get(instance);if(!s){s=new ContractStore(join(this.deps.baseDir,'contract-memory',hash(instance).slice(0,24),'contract.sqlite'));this.stores.set(instance,s);}return s; }
+  llm(instance:string) {return resolveContractLlm(this.deps.llm(instance));}
   async identity(instance:string,b:any,key:string):Promise<Identity> {
     const meta=await this.deps.meta(instance),u=await meta.verifyAuth(key);
     if(!u || u.status!=='active')throw new ContractError(401,'记忆身份已失效');
@@ -43,7 +44,7 @@ export class ContractMemory {
     if(b.task_id)await this.task(c,b.task_id);
     if(action.startsWith('contract-memory/')) {
       const op=action.slice('contract-memory/'.length);
-      if(op==='capture-tools' || op==='capture-events') {if(!b.task_id)throw new ContractError(422,'缺少合同任务');const result=s.capture(c,b.task_id,b.session_id,b.messages,this.deps.llm(instance).model,CONTRACT_PROMPT_VERSION);setImmediate(()=>void this.tick());return result;}
+      if(op==='capture-tools' || op==='capture-events') {if(!b.task_id)throw new ContractError(422,'缺少合同任务');const result=s.capture(c,b.task_id,b.session_id,b.messages,this.llm(instance).model,CONTRACT_PROMPT_VERSION);setImmediate(()=>void this.tick());return result;}
       if(op==='list')return {items:s.list(c,b.scope || 'personal')};
       if(op==='detail')return {entry:s.entry(c,b.id),versions:s.history(c,b.id)};
       if(op==='candidates')return {items:s.candidates(c,b.session_id),jobs:s.jobs(c)};
@@ -75,7 +76,7 @@ export class ContractMemory {
     }
     if(action==='conversation/add') {
       if(!b.task_id)throw new ContractError(422,'缺少合同任务');
-      const result=s.capture(c,b.task_id,b.session_id,b.messages,this.deps.llm(instance).model,CONTRACT_PROMPT_VERSION);
+      const result=s.capture(c,b.task_id,b.session_id,b.messages,this.llm(instance).model,CONTRACT_PROMPT_VERSION);
       setImmediate(()=>void this.tick());return result;
     }
     // Legacy writes can never bypass candidate confirmation, even from Hub.
@@ -100,15 +101,14 @@ export class ContractMemory {
   }
   queueProfile(c:Identity,e:any) {
     if(e.data?.kind!=='experience')return;
-    this.store(c.instance).db.prepare('INSERT OR IGNORE INTO jobs(id,instance,team,agent,user,task,session,model,prompt_version,created) VALUES(?,?,?,?,?,?,?,?,?,?)').run('confirmed-'+e.id,...this.store(c.instance).scope(c),c.user,'','profile',this.deps.llm(c.instance).model,CONTRACT_PROMPT_VERSION,new Date().toISOString());
+    this.store(c.instance).db.prepare('INSERT OR IGNORE INTO jobs(id,instance,team,agent,user,task,session,model,prompt_version,created) VALUES(?,?,?,?,?,?,?,?,?,?)').run('confirmed-'+e.id,...this.store(c.instance).scope(c),c.user,'','profile',this.llm(c.instance).model,CONTRACT_PROMPT_VERSION,new Date().toISOString());
   }
   async completion(instance:string,prompt:string,input:any) {
-    const cfg=this.deps.llm(instance);const response=await fetch(cfg.baseUrl.replace(/\/$/,'')+'/chat/completions',{method:'POST',headers:{Authorization:'Bearer '+cfg.apiKey,'Content-Type':'application/json'},signal:AbortSignal.timeout(cfg.timeoutMs ?? 120000),body:JSON.stringify({model:cfg.model,messages:[{role:'system',content:prompt},{role:'user',content:JSON.stringify(input)}],temperature:0,max_tokens:16000,...(new URL(cfg.baseUrl).hostname==='api.deepseek.com'?{thinking:{type:'disabled'}}:{})})});
-    if(!response.ok)throw new Error('提炼模型响应失败 HTTP '+response.status);const r:any=await response.json();
+    const cfg=this.llm(instance),stage=prompt===CONTRACT_L1_PROMPT?'l1':prompt===CONTRACT_L2_PROMPT?'l2':prompt===CONTRACT_L3_PROMPT?'l3':'conflict';
+    const r=await contractCompletion(cfg,stage,prompt,input,hash([Date.now(),Math.random()]));
     const store=this.store(instance);store.db.exec('CREATE TABLE IF NOT EXISTS llm_runs(id TEXT PRIMARY KEY,data TEXT)');
-    store.db.prepare('INSERT INTO llm_runs VALUES(?,?)').run(hash([Date.now(),Math.random()]),JSON.stringify({model:cfg.model,prompt_version:CONTRACT_PROMPT_VERSION,prompt,input,output:r.choices?.[0]?.message,finish_reason:r.choices?.[0]?.finish_reason,usage:r.usage}));
-    if(r.choices?.[0]?.finish_reason==='length')throw new Error('提炼输出达到长度上限，未发布候选');
-    return decode(r.choices?.[0]?.message?.content || '');
+    store.db.prepare('INSERT INTO llm_runs VALUES(?,?)').run(hash([Date.now(),Math.random()]),JSON.stringify({model:cfg.model,prompt_version:CONTRACT_PROMPT_VERSION,prompt,input,output:r.output,...r.trace}));
+    return r.output;
   }
   async tick() {
     for(const [instance,s] of this.stores) {

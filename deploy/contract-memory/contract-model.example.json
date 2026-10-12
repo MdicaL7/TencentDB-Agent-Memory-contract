@@ -1,0 +1,11 @@
+{
+  "roles": {
+    "memory_extraction": {
+      "provider": "codex_subscription",
+      "model": "gpt-6.1-sol",
+      "adapter_url": "http://host.docker.internal:8766/v1/structured-completions",
+      "token_env": "CONTRACT_EXTRACTION_ADAPTER_TOKEN",
+      "timeout_seconds": 180
+    }
+  }
+}
