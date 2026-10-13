@@ -29,3 +29,17 @@ test('conflict comparison uses the same normalized preference topic as publicati
  await svc.tick();assert.equal(conflicts,1);const draft=s.candidates(c)[0];assert.equal(draft.data.topic,'称呼语气');assert.equal(draft.data.conflicts[0].existing_id,old.id);
  s.edit(c,old.id,old.version,{...old.data,content:'称呼用户为同事。'});assert.throws(()=>s.confirm(c,draft.id));svc.close();
 });
+test('L1 preference evidence never overrides the latest protected formal body',async()=>{
+ const meta:any={verifyAuth:async()=>({user_id:'u',status:'active'}),getAgentById:async()=>({team_id:'team',status:'active',metadata_json:'{"prompt_mode":"contract"}'}),getTeamMember:async()=>({status:'active',role:'member'}),getUserById:async()=>({status:'active'})};
+ const svc=new ContractMemory({baseDir:mkdtempSync(join(tmpdir(),'resolved-preference-')),meta:async()=>meta,llm:()=>({model:'mock',apiKey:'none',baseUrl:'http://not-called'})});
+ const s=svc.store('i'),v=svc.versions.get('i')!;
+ s.capture(c,'t','s',[{role:'user',content:'以后叫我大哥'}],'mock','contract-v2');const messages=v.messages(c,'s');
+ v.ingest(c,'s',{records:[{kind:'long_term_preference',subtype:'communication_preference',content:'称呼用户为大哥',topic:'称呼语气',conditions:[],exceptions:[],source_ids:[messages[0].id],evidence_quote:'以后叫我大哥'}]},messages,'j');
+ const pref=v.preferences(c)[0];const e=s.create(c,{kind:'preference',subtype:'communication_preference',title:'旧称呼大哥',content:'称呼用户为大哥。',topic:'称呼语气',conditions:[],exceptions:[],source_ids:[pref.id]});
+ s.edit(c,e.id,e.version,{...e.data,content:'称呼用户为老师。'});
+ const query=await svc.dispatch('/v3/atomic/query','i',{team_id:'team',agent_id:'agent',user_id:'u'},'user');
+ assert.equal(query.current_formal_preferences[0].content,'称呼用户为老师。');assert.equal(query.current_formal_preferences[0].version,2);
+ assert.equal(query.items[0].type,'preference_statement');assert.equal(query.items[0].metadata.evidence_role,'historical_source');assert.match(query.items[0].content,/不是当前工作约定/);
+ assert.equal(query.items[0].metadata.content,'称呼用户为大哥');assert.equal(v.preferences(c)[0].content,pref.content);
+ s.edit(c,e.id,2,null);const after=await svc.dispatch('/v3/atomic/query','i',{team_id:'team',agent_id:'agent',user_id:'u'},'user');assert.equal(after.items.length,0);assert.equal(after.current_formal_preferences.length,0);svc.close();
+});

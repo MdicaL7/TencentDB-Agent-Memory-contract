@@ -33,13 +33,14 @@ export const opencodeAdapter: AgentAdapter = {
   agentKind: "opencode",
 
   classifyRequest(body) {
-    // OpenCode 2.0.18 sends title generation to the same chat/completions
-    // endpoint as the main conversation. Its first system message carries
-    // this distinct marker; keep that request out of memory/session effects.
+    // Title generation and native 1.16.2 anchored compaction share the main
+    // endpoint. Only inspect the first system instruction, never user text or
+    // historical assistant summaries (which a resumed business turn contains).
     const messages = Array.isArray(body.messages) ? body.messages : [];
     const first = messages[0] as Record<string, unknown> | undefined;
     if (first?.role === "system" && typeof first.content === "string"
-      && first.content.startsWith("You are a title generator. You output ONLY a thread title.")) {
+      && (first.content.startsWith("You are a title generator. You output ONLY a thread title.")
+        || first.content.startsWith("You are an anchored context summarization assistant for coding sessions."))) {
       return "auxiliary";
     }
     return "main";

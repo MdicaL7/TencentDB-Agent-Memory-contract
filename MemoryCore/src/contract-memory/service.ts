@@ -93,7 +93,16 @@ export class ContractMemory {
     // Legacy writes can never bypass candidate confirmation, even from Hub.
     if(/\/(write|update|delete|rm|clear)$/.test(action))throw new ContractError(403,'合同记忆需通过业务确认或审核流程修改');
     if(action.startsWith('atomic/')) {
-      const preferences=this.versions.get(instance)!.preferences(c).filter(p=>!b.task_id || s.one('SELECT 1 FROM raw WHERE instance=? AND team=? AND agent=? AND user=? AND task=? AND session=?',...s.scope(c),c.user,b.task_id,p.session));const formal=s.list(c).filter(e=>e.data.kind==='preference');const active=preferences.filter(p=>formal.some(e=>e.data.source_ids.includes(p.id)));return {items:active.map(p=>({id:p.id,content:p.content,type:'preference',metadata:p})),total:active.length,count:active.length};
+      const v=this.versions.get(instance)!;
+      const preferences=v.preferences(c).filter(p=>!b.task_id || s.one('SELECT 1 FROM raw WHERE instance=? AND team=? AND agent=? AND user=? AND task=? AND session=?',...s.scope(c),c.user,b.task_id,p.session));
+      const formal=s.list(c).filter(e=>e.data.kind==='preference' && v.liveEntry(c,e));
+      const active=preferences.filter(p=>formal.some(e=>e.data.source_ids.includes(p.id)));
+      const current=(e:any)=>({id:e.id,version:e.version,content:e.data.content,topic:e.data.topic,conditions:e.data.conditions,exceptions:e.data.exceptions});
+      // L1 is immutable source evidence. It must never masquerade as the
+      // current setting after the user edits the formally confirmed L3.
+      return {notice:'L1 是历史用户声明，仅用于溯源；当前工作约定以 current_formal_preferences 的最新正文为准，不能用原始声明覆盖人工修订。',
+        current_formal_preferences:formal.map(current),
+        items:active.map(p=>({id:p.id,content:'【历史用户声明，不是当前工作约定】'+p.content,type:'preference_statement',metadata:{...p,evidence_role:'historical_source',current_formal_preferences:formal.filter(e=>e.data.source_ids.includes(p.id)).map(current)}})),total:active.length,count:active.length};
     }
     if(action.startsWith('conversation/')) {
       let messages=s.raw(c);if(b.task_id)messages=messages.filter(m=>m.task===b.task_id);if(b.session_id && b.session_id!=='default')messages=messages.filter(m=>m.session===b.session_id);

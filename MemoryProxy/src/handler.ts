@@ -728,6 +728,21 @@ export async function handleChatCompletions(
   const isAuxiliary = _requestKind === "auxiliary";
   if (isAuxiliary) {
     console.log(`[request-classify] session=${sessionKey} agent=${agentSource} → auxiliary (skip session-init/mem/injection/L0/skill)`);
+    if (agentSource === "opencode") {
+      // Bounded provenance for real native auxiliary requests. Never log the
+      // contract/history body, credentials, or business identity values.
+      const messages = Array.isArray(body.messages) ? body.messages : [];
+      const first = messages[0] as Record<string, unknown> | undefined;
+      console.log("[opencode-auxiliary] " + JSON.stringify({
+        kind: "auxiliary", path: c.req.path, model: body.model,
+        system_marker: typeof first?.content === "string" ? first.content.split("\n")[0] : null,
+        body_sha256: createHash("sha256").update(JSON.stringify(body)).digest("hex"),
+        message_count: messages.length,
+        business_headers_present: ["x-team-id", "x-agent-id", "x-task-id", "x-conversation-id", "x-openharvey-memory-version"]
+          .filter(k => Boolean(lcHeaders[k])),
+        memory_session_init: false, memory_injection: false, memory_l0: false,
+      }));
+    }
   }
 
   // ── dsh (deepseek-harness) CLI headless / no-preset bypass ──────────────
