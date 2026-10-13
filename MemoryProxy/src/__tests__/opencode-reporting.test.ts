@@ -30,6 +30,31 @@ describe("successful completion without usage", () => {
     recordTurn.mockClear();
   });
 
+  it("forwards native compaction without session-init, memory injection or L0", async () => {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.upstream.url = "http://upstream.test/v1";
+    config.sessionInit.enabled = true;
+    config.injection.enabled = true;
+    config.tdai.enabled = true;
+    config.tdai.memory.enabled = true;
+    config.tdai.memory.writeL0 = true;
+    const body = {model:"test-model",messages:[
+      {role:"system",content:"You are an anchored context summarization assistant for coding sessions."},
+      {role:"user",content:"Create a new anchored summary."},
+    ],stream:false};
+    const forward = vi.spyOn(globalThis,"fetch").mockResolvedValue(new Response(JSON.stringify({
+      choices:[{index:0,message:{role:"assistant",content:"## Constraints\n- 60天，20%预付款，仅限本项目"},finish_reason:"stop"}],
+    }),{headers:{"content-type":"application/json"}}));
+    try {
+      const response=await createApp(config).request("http://localhost/opencode/default/v1/chat/completions",{
+        method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body),
+      });
+      expect(response.status).toBe(200);expect(forward).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(String(forward.mock.calls[0][1]?.body))).toEqual(body);
+      expect(recordTurn).not.toHaveBeenCalled();
+    } finally {forward.mockRestore();}
+  });
+
   it("still reports the Langfuse generation", async () => {
     const config = structuredClone(DEFAULT_CONFIG);
     config.upstream.url = "http://upstream.test/v1";
