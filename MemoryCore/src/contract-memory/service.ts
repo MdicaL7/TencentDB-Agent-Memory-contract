@@ -132,6 +132,9 @@ export class ContractMemory {
         const l2=eligible.length && (events.length || l1.records.some((r:any)=>r.kind==='reuse_instruction'))?await this.completion(instance,CONTRACT_L2_PROMPT,{cases:eligible.map(e=>({id:e.source_id,workspace_id:e.workspace,...e.data})),reuse_instructions:prefs.filter(p=>p.kind==='reuse_instruction'),existing:confirmed}):{entries:[]};
         const l3=(job.session==='profile'||l1.records.some((r:any)=>r.kind==='long_term_preference')) && (prefs.some(p=>p.kind==='long_term_preference')||confirmed.length)?await this.completion(instance,CONTRACT_L3_PROMPT,{preferences:prefs.filter(p=>p.kind==='long_term_preference'),confirmed_experiences:confirmed.map(e=>({id:e.id,...e.data}))}):{entries:[]};
         const validated=[...(l2.entries || []),...(l3.entries || [])];
+        // Compare the same canonical scope/topic that publication will store.
+        // Model wording such as “称呼偏好” must not bypass “称呼语气” conflicts.
+        for(const candidate of validated)v.normalizeCandidate(c,candidate);
         // Compare potential conflicts; never auto-update human-confirmed entries.
         const conflicts:any[]=[];
         for(const candidate of validated)for(const existing of s.list(c,'personal').filter(e=>e.data.topic===candidate.topic && e.data.kind===candidate.kind)) {

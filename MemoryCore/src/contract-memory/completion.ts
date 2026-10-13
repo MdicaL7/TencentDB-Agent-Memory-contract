@@ -18,7 +18,20 @@ export function resolveContractLlm(fallback:ContractLlm,env:NodeJS.ProcessEnv=pr
 }
 export async function contractCompletion(cfg:ContractLlm,stage:'l1'|'l2'|'l3'|'conflict'|'case_relevance',prompt:string,input:unknown,requestId:string,fetcher:typeof fetch=fetch) {
   if(cfg.provider==='codex_subscription') {
-    const response=await fetcher(cfg.adapterUrl!,{method:'POST',headers:{Authorization:'Bearer '+cfg.adapterToken,'Content-Type':'application/json'},signal:AbortSignal.timeout((cfg.timeoutMs ?? 180000)+10000),body:JSON.stringify({role:'memory_extraction',model:cfg.model,stage,request_id:requestId,prompt,input})});
+    const deadline=Date.now()+(cfg.timeoutMs ?? 180000)+10000;
+    const body=JSON.stringify({role:'memory_extraction',model:cfg.model,stage,request_id:requestId,prompt,input});
+    let response:Response;
+    // The local subscription adapter admits one inference at a time. Parallel
+    // risk cards must wait within the original deadline instead of becoming
+    // false retrieval failures. Never retry ambiguous successful writes.
+    for(let attempt=0;;attempt++) {
+      const remaining=deadline-Date.now();
+      if(remaining<=0)throw new Error('合同订阅提炼排队超时');
+      response=await fetcher(cfg.adapterUrl!,{method:'POST',headers:{Authorization:'Bearer '+cfg.adapterToken,'Content-Type':'application/json'},signal:AbortSignal.timeout(remaining),body});
+      if(response.status!==429)break;
+      await response.arrayBuffer();
+      await new Promise(resolve=>setTimeout(resolve,Math.min(500*(attempt+1),2000,Math.max(0,deadline-Date.now()))));
+    }
     if(!response.ok)throw new Error('合同订阅提炼失败 HTTP '+response.status);
     const result:any=await response.json();
     if(result.status!=='completed' || result.request_id!==requestId || result.metadata?.requested_model!==cfg.model || result.metadata?.role!=='memory_extraction' || result.metadata?.stage!==stage || !result.output)throw new Error('合同订阅提炼结果或模型标识不匹配');

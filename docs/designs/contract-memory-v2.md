@@ -1,6 +1,6 @@
 # 合同记忆 v2 数据与调用规范
 
-版本 contract-v2；先完成离线验证，真实抽取/评测须经过测试包审查。
+版本 contract-v2；已于 2026-10-13 部署并执行获授权的真实实验。完整运行和评分边界见 OpenHarvey 仓库 docs/evidence/contract-memory-v2-live/README.md。
 
 |层级|业务语义|证据/生效|
 |---|---|---|

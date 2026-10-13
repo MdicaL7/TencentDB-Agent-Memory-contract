@@ -87,10 +87,21 @@ export class ContractV2 {
   return !!e && e.status==='active' && JSON.parse(e.data).schema_version===2 && JSON.parse(e.data).source_ids.every((sid:string)=>this.sourceValid(c,sid));
  }
  liveEntry(c:Identity,e:any) {return e.data.schema_version===2 && (e.scope==='team' || e.data.source_ids.every((id:string)=>this.sourceValid(c,id)||(!id.startsWith('case_')&&!id.startsWith('pref_')&&!this.store.one('SELECT 1 FROM entries WHERE id=?',id))));}
+ normalizeCandidate(c:Identity,data:any) {
+  if(!data || !Array.isArray(data.source_ids))return data;
+  if(data.kind==='experience') {
+   const matched=this.eligible(c).filter(x=>data.source_ids.includes(x.source_id));
+   if(matched.length && new Set(matched.map(x=>x.data.topic)).size===1)data.topic=matched[0].data.topic;
+  } else if(data.kind==='preference') {
+   const selected=this.preferences(c).filter(p=>p.kind==='long_term_preference'&&data.source_ids.includes(p.id));
+   if(selected.length && new Set(selected.map(p=>p.subtype)).size===1){data.subtype=selected[0].subtype;data.topic=data.subtype==='communication_preference'?'称呼语气':canonicalTopic(selected[0].topic);}
+  }
+  return data;
+ }
  publishCandidates(c:Identity,job:any,l2:any,l3:any) {
   const eligible=this.eligible(c),prefs=this.preferences(c),formal=this.store.list(c).filter(e=>e.data.kind==='experience'&&this.liveEntry(c,e));
   for(const data of [...(l2.entries || []),...(l3.entries || [])])try{
-   const v=validateContent(data);if(!v.source_ids.length)throw new Error('候选缺少来源');
+   const v=validateContent(this.normalizeCandidate(c,data));if(!v.source_ids.length)throw new Error('候选缺少来源');
    if(v.kind==='experience') {
     const matched=eligible.filter(x=>v.source_ids.includes(x.source_id)),reuse=prefs.filter(p=>p.kind==='reuse_instruction'&&v.source_ids.includes(p.id));
     if(matched.length && new Set(matched.map(x=>x.data.topic)).size===1)v.topic=matched[0].data.topic;

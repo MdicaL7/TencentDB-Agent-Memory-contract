@@ -22,11 +22,19 @@ test('subscription sends extraction stage only and preserves unverified actual m
 });
 test('HTTP/model mismatch errors never fall back to another provider',async()=>{
  const cfg={...fallback,provider:'codex_subscription' as const,adapterUrl:'http://localhost:8766/v1/structured-completions',adapterToken:'dummy'};
- let calls=0;await assert.rejects(()=>contractCompletion(cfg,'l2','p',[],'r', (async()=>{calls++;return new Response('{}',{status:429});}) as any));assert.equal(calls,1);
+ let calls=0;await assert.rejects(()=>contractCompletion(cfg,'l2','p',[],'r', (async()=>{calls++;return new Response('{}',{status:503});}) as any));assert.equal(calls,1);
  await assert.rejects(()=>contractCompletion(cfg,'l2','p',[],'r',(async()=>new Response(JSON.stringify({status:'completed',request_id:'other',output:{entries:[]}}))) as any));
 });
 test('API path records actual model and rejects truncated extraction',async()=>{
  let body:any;const fake:any=async(_url:any,init:any)=>{body=JSON.parse(init.body);return new Response(JSON.stringify({model:'deepseek-flash',choices:[{finish_reason:'stop',message:{content:'{"entries":[]}'}}]}));};
  const value=await contractCompletion(fallback,'l3','p',[],'r',fake);assert.deepEqual(body.thinking,{type:'disabled'});assert.equal(value.trace.actual_model,'deepseek-flash');
  await assert.rejects(()=>contractCompletion(fallback,'l1','p',[],'r',(async()=>new Response(JSON.stringify({choices:[{finish_reason:'length'}]}))) as any));
+});
+
+test('busy subscription adapter retries within the same request and preserves its identity',async()=>{
+ const cfg={...fallback,provider:'codex_subscription' as const,adapterUrl:'http://localhost:8766/v1/structured-completions',adapterToken:'dummy'};
+ const bodies:string[]=[];let calls=0;
+ const fake:any=async(_url:any,init:any)=>{bodies.push(init.body);if(++calls===1)return new Response('',{status:429});return new Response(JSON.stringify({status:'completed',request_id:'queued',output:{matches:[]},metadata:{requested_model:cfg.model,role:'memory_extraction',stage:'case_relevance'}}));};
+ const result=await contractCompletion(cfg,'case_relevance','p',{},'queued',fake);
+ assert.equal(calls,2);assert.equal(bodies[0],bodies[1]);assert.deepEqual(result.output,{matches:[]});
 });
