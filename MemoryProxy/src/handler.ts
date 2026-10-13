@@ -1305,7 +1305,7 @@ export async function handleChatCompletions(
         : "")
     : null;
   const tdaiUserMessage: TdaiMessage | null = agentSource === "opencode"
-    ? (opencodeUserQuery ? { role: "user", content: opencodeUserQuery } : null)
+    ? (opencodeUserQuery ? { role: "user", content: opencodeUserQuery, ...(c.req.header("x-openharvey-memory-version")==="2"?{source_event_id:c.req.header("x-openharvey-source-event")}: {}) } : null)
     : extractLatestUserMessage(messages);
 
   if(tdaiClient && tdaiIdentity && !isAuxiliary && agentSource==='opencode') {
@@ -1335,6 +1335,7 @@ export async function handleChatCompletions(
         custom: sessionInfo
           ? {
               session: sessionInfo,
+              contractMemoryVersion: c.req.header("x-openharvey-memory-version"),
               assetCapabilities,
               userKey: apiKey || undefined,
             }

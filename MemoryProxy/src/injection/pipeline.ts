@@ -274,7 +274,7 @@ export class InjectionPipeline {
     agentSource: string,
     sessionId: string | null,
   ): Promise<ContextBlock[]> {
-    const strategy = hook.cacheStrategy ?? "none";
+    const strategy = ctx.metadata.custom?.contractMemoryVersion === "2" && hook.id.startsWith("tdai-") ? "none" : hook.cacheStrategy ?? "none";
 
     // Fast path: no cache configured, or no session_id available — legacy.
     if (!this.hookCacheRepo || !sessionId || strategy === "none") {

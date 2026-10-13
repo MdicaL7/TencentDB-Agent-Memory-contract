@@ -16,7 +16,7 @@ export function resolveContractLlm(fallback:ContractLlm,env:NodeJS.ProcessEnv=pr
   if(!config.base_url || !key)throw new Error('合同 API 模型配置无效');
   return {...fallback,provider:'openai_compatible',baseUrl:config.base_url,apiKey:key,model:config.model,timeoutMs:(config.timeout_seconds ?? 180)*1000};
 }
-export async function contractCompletion(cfg:ContractLlm,stage:'l1'|'l2'|'l3'|'conflict',prompt:string,input:unknown,requestId:string,fetcher:typeof fetch=fetch) {
+export async function contractCompletion(cfg:ContractLlm,stage:'l1'|'l2'|'l3'|'conflict'|'case_relevance',prompt:string,input:unknown,requestId:string,fetcher:typeof fetch=fetch) {
   if(cfg.provider==='codex_subscription') {
     const response=await fetcher(cfg.adapterUrl!,{method:'POST',headers:{Authorization:'Bearer '+cfg.adapterToken,'Content-Type':'application/json'},signal:AbortSignal.timeout((cfg.timeoutMs ?? 180000)+10000),body:JSON.stringify({role:'memory_extraction',model:cfg.model,stage,request_id:requestId,prompt,input})});
     if(!response.ok)throw new Error('合同订阅提炼失败 HTTP '+response.status);
